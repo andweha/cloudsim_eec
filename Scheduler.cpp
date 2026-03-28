@@ -19,27 +19,34 @@ void Scheduler::Init() {
     //      Get the number of CPUs
     //      Get if there is a GPU or not
     // 
-    SimOutput("Scheduler::Init(): Total number of machines is " + to_string(Machine_GetTotal()), 3);
+    vms.clear();
+    machines.clear();
+    for(auto &queue : pending_tasks) queue.clear();
+
+    const unsigned total_machines = Machine_GetTotal();
+    SimOutput("Scheduler::Init(): Total number of machines is " + to_string(total_machines), 3);
     SimOutput("Scheduler::Init(): Initializing scheduler", 1);
-    for(unsigned i = 0; i < active_machines; i++)
-        vms.push_back(VM_Create(LINUX, X86));
-    for(unsigned i = 0; i < active_machines; i++) {
+
+    for(unsigned i = 0; i < total_machines; i++) {
+        MachineInfo_t info = Machine_GetInfo(MachineId_t(i));
+        if(info.s_state != S0) continue;
+
+        VMId_t vm_id = VM_Create(LINUX, info.cpu);
+        VM_Attach(vm_id, MachineId_t(i));
         machines.push_back(MachineId_t(i));
-    }    
-    for(unsigned i = 0; i < active_machines; i++) {
-        VM_Attach(vms[i], machines[i]);
+        vms.push_back(vm_id);
     }
+    active_machines = static_cast<unsigned>(machines.size());
 
     bool dynamic = false;
     if(dynamic)
         for(unsigned i = 0; i<4 ; i++)
             for(unsigned j = 0; j < 8; j++)
                 Machine_SetCorePerformance(MachineId_t(0), j, P3);
-    // Turn off the ARM machines
-    for(unsigned i = 24; i < Machine_GetTotal(); i++)
-        Machine_SetState(MachineId_t(i), S5);
-
-    SimOutput("Scheduler::Init(): VM ids are " + to_string(vms[0]) + " ahd " + to_string(vms[1]), 3);
+    if(vms.empty()) {
+        ThrowException("Scheduler::Init(): No machines found to attach VMs");
+    }
+    SimOutput("Scheduler::Init(): Initialized " + to_string(vms.size()) + " VM(s)", 3);
 }
 
 void Scheduler::MigrationComplete(Time_t time, VMId_t vm_id) {
@@ -64,13 +71,10 @@ void Scheduler::NewTask(Time_t now, TaskId_t task_id) {
     // Turn on a machine, migrate an existing VM from a loaded machine....
     //
     // Other possibilities as desired
-    Priority_t priority = (task_id == 0 || task_id == 64)? HIGH_PRIORITY : MID_PRIORITY;
-    if(migrating) {
-        VM_AddTask(vms[0], task_id, priority);
-    }
-    else {
-        VM_AddTask(vms[task_id % active_machines], task_id, priority);
-    }// Skeleton code, you need to change it according to your algorithm
+    (void)now;
+    Priority_t priority = GetPriorityForSLA(RequiredSLA(task_id));
+    pending_tasks[priority].push_back(task_id);
+    DispatchPendingTasks();
 }
 
 void Scheduler::PeriodicCheck(Time_t now) {
@@ -97,6 +101,55 @@ void Scheduler::TaskComplete(Time_t now, TaskId_t task_id) {
     // Decide if a machine is to be turned off, slowed down, or VMs to be migrated according to your policy
     // This is an opportunity to make any adjustments to optimize performance/energy
     SimOutput("Scheduler::TaskComplete(): Task " + to_string(task_id) + " is complete at " + to_string(now), 4);
+}
+
+Priority_t Scheduler::GetPriorityForSLA(SLAType_t sla) const {
+    switch(sla) {
+        case SLA0:
+            return HIGH_PRIORITY;
+        case SLA1:
+            return MID_PRIORITY;
+        case SLA2:
+        case SLA3:
+            return LOW_PRIORITY;
+        default:
+            return MID_PRIORITY;
+    }
+}
+
+void Scheduler::DispatchPendingTasks() {
+    // Dispatch in strict priority order: high, then mid, then low.
+    for(int p = HIGH_PRIORITY; p <= LOW_PRIORITY; p++) {
+        auto &queue = pending_tasks[p];
+        while(!queue.empty()) {
+            TaskId_t next_task = queue.front();
+            queue.pop_front();
+
+            VMId_t target_vm = SelectVMForTask(next_task);
+            VM_AddTask(target_vm, next_task, static_cast<Priority_t>(p));
+        }
+    }
+}
+
+VMId_t Scheduler::SelectVMForTask(TaskId_t task_id) const {
+    const CPUType_t required_cpu = RequiredCPUType(task_id);
+    const VMType_t required_vm = RequiredVMType(task_id);
+    const unsigned required_mem = GetTaskMemory(task_id);
+
+    for(const auto vm_id : vms) {
+        VMInfo_t vm_info = VM_GetInfo(vm_id);
+        if(vm_info.cpu != required_cpu) continue;
+        if(vm_info.vm_type != required_vm) continue;
+
+        MachineInfo_t machine_info = Machine_GetInfo(vm_info.machine_id);
+        if(machine_info.s_state != S0) continue;
+        if(machine_info.memory_used + required_mem > machine_info.memory_size) continue;
+
+        return vm_id;
+    }
+
+    ThrowException("Scheduler::SelectVMForTask(): No compatible VM found for task", task_id);
+    return vms[0];
 }
 
 // Public interface below
@@ -134,12 +187,6 @@ void SchedulerCheck(Time_t time) {
     // This function is called periodically by the simulator, no specific event
     SimOutput("SchedulerCheck(): SchedulerCheck() called at " + to_string(time), 4);
     Scheduler.PeriodicCheck(time);
-    static unsigned counts = 0;
-    counts++;
-    if(counts == 10) {
-        migrating = true;
-        VM_Migrate(1, 9);
-    }
 }
 
 void SimulationComplete(Time_t time) {
@@ -162,4 +209,3 @@ void SLAWarning(Time_t time, TaskId_t task_id) {
 void StateChangeComplete(Time_t time, MachineId_t machine_id) {
     // Called in response to an earlier request to change the state of a machine
 }
-
