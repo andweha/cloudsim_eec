@@ -6,6 +6,7 @@
 //
 
 #include "Scheduler.hpp"
+#include <cstdlib>
 
 static bool migrating = false;
 static unsigned active_machines = 16;
@@ -38,6 +39,17 @@ void Scheduler::Init() {
     }
     active_machines = static_cast<unsigned>(machines.size());
 
+    const char *algo_env = std::getenv("SCHED_ALGO");
+    string algo = (algo_env == nullptr) ? "greedy" : string(algo_env);
+    if(algo == "greedy") algorithm = Algorithm_t::GREEDY;
+    else if(algo == "pmapper") algorithm = Algorithm_t::PMAPPER;
+    else if(algo == "round_robin") algorithm = Algorithm_t::ROUND_ROBIN;
+    else if(algo == "e_eco") algorithm = Algorithm_t::E_ECO;
+    else {
+        algorithm = Algorithm_t::GREEDY;
+        SimOutput("Scheduler::Init(): Unknown SCHED_ALGO=" + algo + ", defaulting to greedy", 1);
+    }
+
     bool dynamic = false;
     if(dynamic)
         for(unsigned i = 0; i<4 ; i++)
@@ -47,6 +59,7 @@ void Scheduler::Init() {
         ThrowException("Scheduler::Init(): No machines found to attach VMs");
     }
     SimOutput("Scheduler::Init(): Initialized " + to_string(vms.size()) + " VM(s)", 3);
+    SimOutput("Scheduler::Init(): Active algorithm is " + algo, 2);
 }
 
 void Scheduler::MigrationComplete(Time_t time, VMId_t vm_id) {
@@ -71,10 +84,23 @@ void Scheduler::NewTask(Time_t now, TaskId_t task_id) {
     // Turn on a machine, migrate an existing VM from a loaded machine....
     //
     // Other possibilities as desired
-    (void)now;
-    Priority_t priority = GetPriorityForSLA(RequiredSLA(task_id));
-    pending_tasks[priority].push_back(task_id);
-    DispatchPendingTasks();
+    switch(algorithm) {
+        case Algorithm_t::GREEDY:
+            NewTaskGreedy(now, task_id);
+            break;
+        case Algorithm_t::PMAPPER:
+            NewTaskPMapper(now, task_id);
+            break;
+        case Algorithm_t::ROUND_ROBIN:
+            NewTaskRoundRobin(now, task_id);
+            break;
+        case Algorithm_t::E_ECO:
+            NewTaskEEco(now, task_id);
+            break;
+        default:
+            NewTaskGreedy(now, task_id);
+            break;
+    }
 }
 
 void Scheduler::PeriodicCheck(Time_t now) {
@@ -101,6 +127,31 @@ void Scheduler::TaskComplete(Time_t now, TaskId_t task_id) {
     // Decide if a machine is to be turned off, slowed down, or VMs to be migrated according to your policy
     // This is an opportunity to make any adjustments to optimize performance/energy
     SimOutput("Scheduler::TaskComplete(): Task " + to_string(task_id) + " is complete at " + to_string(now), 4);
+}
+
+void Scheduler::NewTaskGreedy(Time_t now, TaskId_t task_id) {
+    (void)now;
+    Priority_t priority = GetPriorityForSLA(RequiredSLA(task_id));
+    pending_tasks[priority].push_back(task_id);
+    DispatchPendingTasks();
+}
+
+void Scheduler::NewTaskPMapper(Time_t now, TaskId_t task_id) {
+    (void)now;
+    SimOutput("Scheduler::NewTaskPMapper(): Placeholder policy, temporarily using greedy", 2);
+    NewTaskGreedy(now, task_id);
+}
+
+void Scheduler::NewTaskRoundRobin(Time_t now, TaskId_t task_id) {
+    (void)now;
+    SimOutput("Scheduler::NewTaskRoundRobin(): Placeholder policy, temporarily using greedy", 2);
+    NewTaskGreedy(now, task_id);
+}
+
+void Scheduler::NewTaskEEco(Time_t now, TaskId_t task_id) {
+    (void)now;
+    SimOutput("Scheduler::NewTaskEEco(): Placeholder policy, temporarily using greedy", 2);
+    NewTaskGreedy(now, task_id);
 }
 
 Priority_t Scheduler::GetPriorityForSLA(SLAType_t sla) const {
@@ -135,6 +186,12 @@ VMId_t Scheduler::SelectVMForTask(TaskId_t task_id) const {
     const CPUType_t required_cpu = RequiredCPUType(task_id);
     const VMType_t required_vm = RequiredVMType(task_id);
     const unsigned required_mem = GetTaskMemory(task_id);
+    const SLAType_t required_sla = RequiredSLA(task_id);
+    const bool latency_sensitive = (required_sla == SLA0 || required_sla == SLA1);
+
+    VMId_t best_vm = vms[0];
+    bool found = false;
+    unsigned best_score = 0;
 
     for(const auto vm_id : vms) {
         VMInfo_t vm_info = VM_GetInfo(vm_id);
@@ -145,9 +202,28 @@ VMId_t Scheduler::SelectVMForTask(TaskId_t task_id) const {
         if(machine_info.s_state != S0) continue;
         if(machine_info.memory_used + required_mem > machine_info.memory_size) continue;
 
-        return vm_id;
+        // Greedy policy:
+        // - For tighter SLAs, spread load to reduce queueing delay.
+        // - For loose SLAs, consolidate to save energy.
+        unsigned score = machine_info.active_tasks;
+        if(!found) {
+            found = true;
+            best_score = score;
+            best_vm = vm_id;
+            continue;
+        }
+
+        if(latency_sensitive && score < best_score) {
+            best_score = score;
+            best_vm = vm_id;
+        }
+        if(!latency_sensitive && score > best_score) {
+            best_score = score;
+            best_vm = vm_id;
+        }
     }
 
+    if(found) return best_vm;
     ThrowException("Scheduler::SelectVMForTask(): No compatible VM found for task", task_id);
     return vms[0];
 }
