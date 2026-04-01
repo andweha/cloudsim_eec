@@ -37,8 +37,13 @@ private:
     void NewTaskRoundRobin(Time_t now, TaskId_t task_id);
     void NewTaskEEco(Time_t now, TaskId_t task_id);
 
+    bool TryPlaceTask(TaskId_t task_id, Priority_t priority);
+    bool CanHostTask(VMId_t vm_id, TaskId_t task_id) const;
     Priority_t GetPriorityForSLA(SLAType_t sla) const;
     VMId_t SelectVMForTask(TaskId_t task_id) const;
+    VMId_t SelectVMRoundRobin(TaskId_t task_id);
+    VMId_t SelectVMPMapper(TaskId_t task_id) const;
+    VMId_t SelectVMEEco(TaskId_t task_id) const;
     void DispatchPendingTasks();
 
     vector<VMId_t> vms;
