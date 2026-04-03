@@ -1,0 +1,71 @@
+machine class:
+{
+# Low power CPU-only nodes for nonintensive background processing
+        Number of machines: 10
+        CPU type: X86
+        Number of cores: 4
+        Memory: 8192
+        S-States: [90, 70, 70, 55, 25, 8, 0]
+        P-States: [9, 7, 5, 3]
+        C-States: [9, 2, 1, 0]
+        MIPS: [950, 750, 550, 350]
+        GPUs: no
+}
+machine class:
+{
+# High performance GPU-enabled nodes for heavy workloads
+        Number of machines: 6
+        CPU type: X86
+        Number of cores: 12
+        Memory: 16384
+        S-States: [210, 175, 175, 140, 70, 18, 0]
+        P-States: [22, 16, 12, 8]
+        C-States: [22, 6, 2, 0]
+        MIPS: [1800, 1400, 1000, 700]
+        GPUs: yes
+}
+task class:
+{
+# Long running SLA2 background, HPC workload that is supposed to soak up cluster capacity
+        Start time: 0
+        End time : 900000
+        Inter arrival: 32000
+        Expected runtime: 4200000
+        Memory: 48
+        VM type: LINUX
+        GPU enabled: no
+        SLA type: SLA2
+        CPU type: X86
+        Task type: HPC
+        Seed: 101
+}
+task class:
+{
+# Another continuous SLA2 workload stream representing stream processing load
+        Start time: 0
+        End time : 900000
+        Inter arrival: 34000
+        Expected runtime: 4000000
+        Memory: 48
+        VM type: LINUX
+        GPU enabled: no
+        SLA type: SLA2
+        CPU type: X86
+        Task type: STREAM
+        Seed: 202
+}
+task class:
+{
+# Short, important (SLA0) crypto spike that utilizes GPU and supposed to stress resources
+        Start time: 260000
+        End time : 340000
+        Inter arrival: 3200
+        Expected runtime: 1200000
+        Memory: 96
+        VM type: LINUX
+        GPU enabled: yes
+        SLA type: SLA0
+        CPU type: X86
+        Task type: CRYPTO
+        Seed: 303
+}
